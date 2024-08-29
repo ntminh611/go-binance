@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,7 +24,19 @@ var (
 	WebsocketKeepalive = false
 	// UseTestnet switch all the WS streams from production to the testnet
 	UseTestnet = false
+	ProxyUrl   = ""
 )
+
+func getWsProxyUrl() *string {
+	if ProxyUrl == "" {
+		return nil
+	}
+	return &ProxyUrl
+}
+
+func SetWsProxyUrl(url string) {
+	ProxyUrl = url
+}
 
 // getWsEndpoint return the base endpoint of the WS according the UseTestnet flag
 func getWsEndpoint() string {
@@ -404,8 +417,8 @@ type WsContinuousKline struct {
 	ActiveBuyQuoteVolume string `json:"Q"`
 }
 
-// WsContinuousKlineSubcribeArgs used with WsContinuousKlineServe or WsCombinedContinuousKlineServe
-type WsContinuousKlineSubcribeArgs struct {
+// WsContinuousKlineSubscribeArgs used with WsContinuousKlineServe or WsCombinedContinuousKlineServe
+type WsContinuousKlineSubscribeArgs struct {
 	Pair         string
 	ContractType string
 	Interval     string
@@ -415,7 +428,7 @@ type WsContinuousKlineSubcribeArgs struct {
 type WsContinuousKlineHandler func(event *WsContinuousKlineEvent)
 
 // WsContinuousKlineServe serve websocket continuous kline handler with a pair and contractType and interval like 15m, 30s
-func WsContinuousKlineServe(subscribeArgs *WsContinuousKlineSubcribeArgs, handler WsContinuousKlineHandler,
+func WsContinuousKlineServe(subscribeArgs *WsContinuousKlineSubscribeArgs, handler WsContinuousKlineHandler,
 	errHandler ErrHandler) (doneC, stopC chan struct{}, err error) {
 	endpoint := fmt.Sprintf("%s/%s_%s@continuousKline_%s", getWsEndpoint(), strings.ToLower(subscribeArgs.Pair),
 		strings.ToLower(subscribeArgs.ContractType), subscribeArgs.Interval)
@@ -433,7 +446,7 @@ func WsContinuousKlineServe(subscribeArgs *WsContinuousKlineSubcribeArgs, handle
 }
 
 // WsCombinedContinuousKlineServe is similar to WsContinuousKlineServe, but it handles multiple pairs of different contractType with its interval
-func WsCombinedContinuousKlineServe(subscribeArgsList []*WsContinuousKlineSubcribeArgs,
+func WsCombinedContinuousKlineServe(subscribeArgsList []*WsContinuousKlineSubscribeArgs,
 	handler WsContinuousKlineHandler, errHandler ErrHandler) (doneC, stopC chan struct{}, err error) {
 	endpoint := getCombinedEndpoint()
 	for _, val := range subscribeArgsList {
@@ -1002,6 +1015,43 @@ type WsUserDataEvent struct {
 	AccountUpdate       WsAccountUpdate       `json:"a"`
 	OrderTradeUpdate    WsOrderTradeUpdate    `json:"o"`
 	AccountConfigUpdate WsAccountConfigUpdate `json:"ac"`
+}
+
+func (e *WsUserDataEvent) UnmarshalJSON(data []byte) error {
+	var tmp struct {
+		Event               UserDataEventType     `json:"e"`
+		Time                interface{}           `json:"E"`
+		CrossWalletBalance  string                `json:"cw"`
+		MarginCallPositions []WsPosition          `json:"p"`
+		TransactionTime     int64                 `json:"T"`
+		AccountUpdate       WsAccountUpdate       `json:"a"`
+		OrderTradeUpdate    WsOrderTradeUpdate    `json:"o"`
+		AccountConfigUpdate WsAccountConfigUpdate `json:"ac"`
+	}
+	if err := json.Unmarshal(data, &tmp); err != nil {
+		return err
+	}
+
+	e.Event = tmp.Event
+	switch v := tmp.Time.(type) {
+	case float64:
+		e.Time = int64(v)
+	case string:
+		parsedTime, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return err
+		}
+		e.Time = parsedTime
+	default:
+		return fmt.Errorf("unexpected type for E: %T", tmp.Time)
+	}
+	e.CrossWalletBalance = tmp.CrossWalletBalance
+	e.MarginCallPositions = tmp.MarginCallPositions
+	e.TransactionTime = tmp.TransactionTime
+	e.AccountUpdate = tmp.AccountUpdate
+	e.OrderTradeUpdate = tmp.OrderTradeUpdate
+	e.AccountConfigUpdate = tmp.AccountConfigUpdate
+	return nil
 }
 
 // WsAccountUpdate define account update
